@@ -2,6 +2,7 @@
 set -euo pipefail
 
 MESSAGE="${1:-Deploy $(date '+%Y-%m-%d %H:%M:%S')}"
+TAG="${2:-v$(date '+%Y.%m.%d.%H%M%S')}"
 
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "Not a git repository."
@@ -33,4 +34,14 @@ bash upload-site.sh
 
 git push -u "${REMOTE_NAME}" "${BRANCH}"
 
-echo "Deployment complete and commit pushed to ${REMOTE_NAME}/${BRANCH}."
+if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
+  echo "Tag ${TAG} already exists."
+  echo "Pass a different tag as the second argument, for example:"
+  echo "  ./deploy-and-push.sh \"${MESSAGE}\" v$(date '+%Y.%m.%d.%H%M%S')"
+  exit 1
+fi
+
+git tag -a "${TAG}" -m "${MESSAGE}"
+git push "${REMOTE_NAME}" "${TAG}"
+
+echo "Deployment complete, commit pushed to ${REMOTE_NAME}/${BRANCH}, and tag ${TAG} pushed."
