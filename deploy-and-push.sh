@@ -2,7 +2,7 @@
 set -euo pipefail
 
 MESSAGE="${1:-Deploy $(date '+%Y-%m-%d %H:%M:%S')}"
-TAG="${2:-v$(date '+%Y.%m.%d.%H%M%S')}"
+TAG="${2:-}"
 
 if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "Not a git repository."
@@ -23,6 +23,18 @@ if [[ -z "${BRANCH}" ]]; then
   exit 1
 fi
 
+# Pull remote tags so auto-increment considers tags created from other machines.
+git fetch --tags --quiet "${REMOTE_NAME}" || true
+
+if [[ -z "${TAG}" ]]; then
+  DATE_PREFIX="v$(date '+%Y.%m.%d')"
+  NEXT_PATCH=1
+  while git rev-parse -q --verify "refs/tags/${DATE_PREFIX}.${NEXT_PATCH}" >/dev/null 2>&1; do
+    NEXT_PATCH=$((NEXT_PATCH + 1))
+  done
+  TAG="${DATE_PREFIX}.${NEXT_PATCH}"
+fi
+
 if [[ -n "$(git status --porcelain)" ]]; then
   git add -A
   git commit -m "${MESSAGE}"
@@ -37,7 +49,7 @@ git push -u "${REMOTE_NAME}" "${BRANCH}"
 if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null 2>&1; then
   echo "Tag ${TAG} already exists."
   echo "Pass a different tag as the second argument, for example:"
-  echo "  ./deploy-and-push.sh \"${MESSAGE}\" v$(date '+%Y.%m.%d.%H%M%S')"
+  echo "  ./deploy-and-push.sh \"${MESSAGE}\" v$(date '+%Y.%m.%d').99"
   exit 1
 fi
 
