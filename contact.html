@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Contact | Willow House Photography</title>
+    <meta
+      name="description"
+      content="Contact Willow House Photography to inquire about a session or start the booking process."
+    />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <div class="top-note">Contact</div>
+
+      <header class="site-header">
+        <a class="brand" href="index.html" aria-label="Willow House Photography home">
+          <span class="brand-mark">WH</span>
+          <span class="brand-copy">
+            <span class="brand-name">Willow House Photography</span>
+          </span>
+        </a>
+
+        <nav class="site-nav" aria-label="Primary">
+          <a href="index.html">Home</a>
+          <a href="about.html">About</a>
+          <a href="studio-sessions.html">Studio Sessions</a>
+          <a href="outdoor-sessions.html">Outdoor Sessions</a>
+          <a href="portfolio.html">Portfolio</a>
+          <a href="faq.html">FAQ</a>
+          <a href="shop.html">Shop</a>
+          <a href="contact.html" class="nav-cta" aria-current="page">Contact</a>
+        </nav>
+      </header>
+
+      <main>
+        <section class="page-hero contact-hero">
+          <p class="eyebrow">Booking / Contact</p>
+          <h1>Start with a simple inquiry.</h1>
+          <p class="lead">
+            This page is the first step toward building the full contact flow. For now, it
+            gives clients a warm place to share a few details and start a conversation.
+          </p>
+        </section>
+
+        <section class="contact-layout">
+          <article class="content-card form-card">
+            <p class="section-label">Inquiry form</p>
+            <form class="contact-form" id="contact-form" action="#" method="post">
+              <input type="text" name="company" autocomplete="off" class="honeypot" tabindex="-1" aria-hidden="true" />
+              <div class="form-grid">
+                <label>
+                  Full Name
+                  <input type="text" name="name" placeholder="Your name" required />
+                </label>
+                <label>
+                  Email Address
+                  <input type="email" name="email" placeholder="you@example.com" required />
+                </label>
+                <label>
+                  Phone Number
+                  <input type="tel" name="phone" placeholder="(555) 555-5555" />
+                </label>
+                <label>
+                  Session Type
+                  <select name="session-type">
+                    <option>Studio Session</option>
+                    <option>Outdoor Session</option>
+                    <option>Not sure yet</option>
+                  </select>
+                </label>
+              </div>
+
+              <label>
+                Tell me about what you’re looking for
+                <textarea
+                  name="message"
+                  rows="6"
+                  placeholder="Share the season you're in, the type of photos you want, and any details that will help me understand your vision."
+                  required
+                ></textarea>
+              </label>
+
+              <button class="button primary form-button" type="submit">Send Inquiry</button>
+              <p id="form-status" class="form-status" aria-live="polite"></p>
+            </form>
+          </article>
+
+          <aside class="content-card contact-sidecard">
+            <p class="section-label">What happens next</p>
+            <ul class="check-list">
+              <li>You share a few details about the session you want.</li>
+              <li>We talk through timing, location, and what fits best.</li>
+              <li>Later, this page can be connected to a full booking workflow.</li>
+            </ul>
+          </aside>
+        </section>
+      </main>
+
+      <script src="contact-form.js"></script>
+    </div>
+  </body>
+</html>

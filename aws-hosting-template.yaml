@@ -1,0 +1,417 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Willow House Photography static website hosting scaffold
+
+Parameters:
+  DomainName:
+    Type: String
+    Default: willowhousephotography.com
+    Description: Apex domain reserved in Route 53.
+  HostedZoneId:
+    Type: String
+    Description: Route 53 hosted zone ID for the domain.
+  CertificateArn:
+    Type: String
+    Description: ACM certificate ARN in us-east-1 for CloudFront.
+  ContactFromEmail:
+    Type: String
+    Default: larrycoons@larrycoons.com
+    Description: Verified SES sender address used by the contact form Lambda.
+  NotificationEmails:
+    Type: String
+    Default: larrycoons@larrycoons.com,lynseycoons@gmail.com
+    Description: Comma-separated list of recipient emails for contact inquiries.
+
+Resources:
+  WebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref DomainName
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: index.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: false
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: false
+
+  WebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebsiteBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontRead
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${WebsiteBucket.Arn}/*'
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${WebsiteDistribution}'
+
+  ImagesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${DomainName}-images'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: false
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: false
+      CorsConfiguration:
+        CorsRules:
+          - AllowedMethods:
+              - GET
+            AllowedOrigins:
+              - '*'
+            AllowedHeaders:
+              - '*'
+            MaxAge: 3000
+
+  ImagesBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref ImagesBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowCloudFrontReadForImages
+            Effect: Allow
+            Principal:
+              Service: cloudfront.amazonaws.com
+            Action: s3:GetObject
+            Resource: !Sub '${ImagesBucket.Arn}/*'
+
+            Condition:
+              StringEquals:
+                AWS:SourceArn: !Sub 'arn:aws:cloudfront::${AWS::AccountId}:distribution/${WebsiteDistribution}'
+
+  ContactFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: AllowSesEmailDelivery
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: '*'
+
+  ContactFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt ContactFunctionRole.Arn
+      Timeout: 15
+      MemorySize: 256
+      Environment:
+        Variables:
+          FROM_EMAIL: !Ref ContactFromEmail
+          TO_EMAILS: !Ref NotificationEmails
+          SITE_DOMAIN: !Ref DomainName
+      Code:
+        ZipFile: |
+          import base64
+          import json
+          import os
+          import boto3
+          from botocore.exceptions import BotoCoreError, ClientError
+
+          ses = boto3.client('sesv2')
+
+          def _json(status, payload):
+              return {
+                  'statusCode': status,
+                  'headers': {
+                      'Content-Type': 'application/json',
+                      'Access-Control-Allow-Origin': '*',
+                      'Access-Control-Allow-Headers': 'content-type',
+                      'Access-Control-Allow-Methods': 'OPTIONS,POST'
+                  },
+                  'body': json.dumps(payload)
+              }
+
+          def _parse(event):
+              body = event.get('body') or '{}'
+              if event.get('isBase64Encoded'):
+                  body = base64.b64decode(body).decode('utf-8')
+              return json.loads(body)
+
+          def handler(event, context):
+              method = event.get('requestContext', {}).get('http', {}).get('method', '')
+              if method == 'OPTIONS':
+                  return _json(200, {'ok': True})
+
+              if method != 'POST':
+                  return _json(405, {'message': 'Method not allowed.'})
+
+              data = _parse(event)
+              name = (data.get('name') or '').strip()
+              email = (data.get('email') or '').strip()
+              phone = (data.get('phone') or '').strip()
+              session_type = (data.get('sessionType') or '').strip()
+              message = (data.get('message') or '').strip()
+
+              if not name or not email or not message:
+                  return _json(400, {'message': 'Name, email, and message are required.'})
+
+              recipients = [item.strip() for item in os.environ.get('TO_EMAILS', '').split(',') if item.strip()]
+              if not recipients:
+                  return _json(500, {'message': 'No recipient emails configured.'})
+
+              print(json.dumps({
+                  'level': 'info',
+                  'message': 'Preparing SES send_email call',
+                  'awsRequestId': context.aws_request_id,
+                  'fromEmail': os.environ.get('FROM_EMAIL', ''),
+                  'recipientCount': len(recipients),
+                  'recipients': recipients,
+                  'senderEmail': email,
+              }))
+
+              subject = f"Willow House Photography inquiry from {name}"
+              plain = [
+                  'New inquiry received from willowhousephotography.com',
+                  '',
+                  f'Name: {name}',
+                  f'Email: {email}',
+                  f'Phone: {phone or "-"}',
+                  f'Session Type: {session_type or "-"}',
+                  '',
+                  'Message:',
+                  message,
+              ]
+
+              try:
+                  response = ses.send_email(
+                      FromEmailAddress=os.environ['FROM_EMAIL'],
+                      Destination={'ToAddresses': recipients},
+                      ReplyToAddresses=[email],
+                      Content={
+                          'Simple': {
+                              'Subject': {'Data': subject, 'Charset': 'UTF-8'},
+                              'Body': {
+                                  'Text': {'Data': '\n'.join(plain), 'Charset': 'UTF-8'},
+                              },
+                          },
+                        },
+                  )
+              except (ClientError, BotoCoreError) as exc:
+                  print(json.dumps({
+                      'level': 'error',
+                      'message': 'SES send_email failed',
+                      'awsRequestId': context.aws_request_id,
+                      'error': str(exc),
+                  }))
+                  return _json(502, {'message': 'Unable to send inquiry email right now.'})
+
+              print(json.dumps({
+                  'level': 'info',
+                  'message': 'SES send_email accepted',
+                  'awsRequestId': context.aws_request_id,
+                  'messageId': response.get('MessageId', ''),
+                  'recipients': recipients,
+              }))
+
+              return _json(200, {'ok': True, 'message': 'Inquiry sent.'})
+
+  ContactApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub '${DomainName}-contact-api'
+      ProtocolType: HTTP
+      CorsConfiguration:
+        AllowCredentials: false
+        AllowHeaders:
+          - content-type
+        AllowMethods:
+          - OPTIONS
+          - POST
+        AllowOrigins:
+          - !Sub 'https://${DomainName}'
+          - !Sub 'https://www.${DomainName}'
+
+  ContactApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref ContactApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub
+        - arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${FunctionArn}/invocations
+        - FunctionArn: !GetAtt ContactFunction.Arn
+      PayloadFormatVersion: '2.0'
+
+  ContactApiRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref ContactApi
+      RouteKey: POST /api/contact
+      Target: !Sub 'integrations/${ContactApiIntegration}'
+
+  ContactApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref ContactApi
+      StageName: '$default'
+      AutoDeploy: true
+
+  ContactApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ContactFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ContactApi}/*/*/api/contact'
+
+  OriginAccessControl:
+    Type: AWS::CloudFront::OriginAccessControl
+    Properties:
+      OriginAccessControlConfig:
+        Name: !Sub '${DomainName}-oac'
+        Description: Access control for Willow House Photography website bucket
+        SigningBehavior: always
+        SigningProtocol: sigv4
+        OriginAccessControlOriginType: s3
+
+  WebsiteDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        DefaultRootObject: index.html
+        Aliases:
+          - !Ref DomainName
+          - !Sub 'www.${DomainName}'
+        HttpVersion: http2and3
+        IPV6Enabled: true
+        Origins:
+          - Id: website-origin
+            DomainName: !GetAtt WebsiteBucket.RegionalDomainName
+            S3OriginConfig: {}
+            OriginAccessControlId: !Ref OriginAccessControl
+          - Id: images-origin
+            DomainName: !GetAtt ImagesBucket.RegionalDomainName
+            S3OriginConfig: {}
+            OriginAccessControlId: !Ref OriginAccessControl
+          - Id: api-origin
+            DomainName: !Sub '${ContactApi}.execute-api.${AWS::Region}.amazonaws.com'
+            CustomOriginConfig:
+              HTTPSPort: 443
+              OriginProtocolPolicy: https-only
+        DefaultCacheBehavior:
+          TargetOriginId: website-origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+        CacheBehaviors:
+          - PathPattern: /images/*
+            TargetOriginId: images-origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+            CachedMethods:
+              - GET
+              - HEAD
+            Compress: true
+            ForwardedValues:
+              QueryString: false
+              Cookies:
+                Forward: none
+          - PathPattern: /api/*
+            TargetOriginId: api-origin
+            ViewerProtocolPolicy: redirect-to-https
+            AllowedMethods:
+              - GET
+              - HEAD
+              - OPTIONS
+              - PUT
+              - POST
+              - PATCH
+              - DELETE
+            CachedMethods:
+              - GET
+              - HEAD
+            Compress: true
+            ForwardedValues:
+              QueryString: true
+              Headers:
+                - Content-Type
+                - Origin
+                - Access-Control-Request-Method
+                - Access-Control-Request-Headers
+              Cookies:
+                Forward: none
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+        ViewerCertificate:
+          AcmCertificateArn: !Ref CertificateArn
+          SslSupportMethod: sni-only
+          MinimumProtocolVersion: TLSv1.2_2021
+
+  WebsiteRecordApex:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt WebsiteDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+        EvaluateTargetHealth: false
+
+  WebsiteRecordWww:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Sub 'www.${DomainName}'
+      Type: A
+      AliasTarget:
+        DNSName: !GetAtt WebsiteDistribution.DomainName
+        HostedZoneId: Z2FDTNDATAQYW2
+        EvaluateTargetHealth: false
+
+Outputs:
+  WebsiteBucketName:
+    Value: !Ref WebsiteBucket
+  ImagesBucketName:
+    Value: !Ref ImagesBucket
+  CloudFrontDistributionId:
+    Value: !Ref WebsiteDistribution
+  WebsiteUrl:
+    Value: !Sub 'https://${DomainName}'
+  ContactApiRoute:
+    Value: !Sub 'https://${DomainName}/api/contact'
+
