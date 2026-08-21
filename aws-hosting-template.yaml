@@ -20,6 +20,18 @@ Parameters:
     Type: String
     Default: larrycoons@larrycoons.com,lynseycoons@gmail.com
     Description: Comma-separated list of recipient emails for contact inquiries.
+  ForwardingMailboxLocalPart:
+    Type: String
+    Default: lynsey
+    Description: Local-part for inbound forwarding address, for example lynsey.
+  ForwardingDestinationEmail:
+    Type: String
+    Default: lynseycoons@gmail.com
+    Description: External email destination that receives forwarded inbound mail.
+  ForwardingFromEmail:
+    Type: String
+    Default: larrycoons@larrycoons.com
+    Description: Verified SES sender used when forwarding inbound emails.
 
 Resources:
   WebsiteBucket:
@@ -279,6 +291,201 @@ Resources:
       Principal: apigateway.amazonaws.com
       SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${ContactApi}/*/*/api/contact'
 
+  InboundMailBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${DomainName}-inbound-mail'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: ExpireInboundMail
+            Status: Enabled
+            ExpirationInDays: 30
+            Prefix: inbound/
+
+  InboundMailBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref InboundMailBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: AllowSesPutInboundMessages
+            Effect: Allow
+            Principal:
+              Service: ses.amazonaws.com
+            Action: s3:PutObject
+            Resource: !Sub '${InboundMailBucket.Arn}/inbound/*'
+            Condition:
+              StringEquals:
+                AWS:SourceAccount: !Ref AWS::AccountId
+              StringLike:
+                AWS:SourceArn: !Sub 'arn:aws:ses:${AWS::Region}:${AWS::AccountId}:receipt-rule-set/${InboundReceiptRuleSet}:receipt-rule/*'
+
+  InboundForwardRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: InboundForwardPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                Resource: !Sub '${InboundMailBucket.Arn}/inbound/*'
+              - Effect: Allow
+                Action:
+                  - ses:SendRawEmail
+                Resource: '*'
+
+  InboundForwardFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt InboundForwardRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          INBOUND_BUCKET: !Ref InboundMailBucket
+          INBOUND_PREFIX: inbound/
+          FORWARD_TO_EMAIL: !Ref ForwardingDestinationEmail
+          FORWARD_FROM_EMAIL: !Ref ForwardingFromEmail
+      Code:
+        ZipFile: |
+          import json
+          import os
+          import boto3
+          from email import policy
+          from email.parser import BytesParser
+          from email.message import EmailMessage
+
+          s3 = boto3.client('s3')
+          ses = boto3.client('ses')
+
+          def _find_text_part(message, subtype):
+              content_type = f'text/{subtype}'
+              if message.get_content_type() == content_type:
+                  try:
+                      return message.get_content()
+                  except Exception:
+                      return None
+
+              for part in message.walk():
+                  if part.get_content_type() != content_type:
+                      continue
+                  if part.get_content_disposition() not in (None, 'inline'):
+                      continue
+                  try:
+                      return part.get_content()
+                  except Exception:
+                      continue
+              return None
+
+          def handler(event, context):
+              record = event.get('Records', [{}])[0].get('ses', {})
+              mail = record.get('mail', {})
+              receipt = record.get('receipt', {})
+
+              message_id = mail.get('messageId')
+              if not message_id:
+                  raise ValueError('SES event missing mail.messageId')
+
+              bucket = os.environ['INBOUND_BUCKET']
+              prefix = os.environ.get('INBOUND_PREFIX', 'inbound/')
+              key = f"{prefix}{message_id}"
+
+              obj = s3.get_object(Bucket=bucket, Key=key)
+              raw_bytes = obj['Body'].read()
+              parsed = BytesParser(policy=policy.default).parsebytes(raw_bytes)
+
+              original_subject = parsed.get('subject', '(no subject)')
+              original_from = mail.get('source', '(unknown sender)')
+              original_to = ', '.join(receipt.get('recipients', [])) or '(unknown recipient)'
+              original_text = _find_text_part(parsed, 'plain')
+
+              forwarded = EmailMessage()
+              forwarded['Subject'] = f"Fwd: {original_subject}"
+              forwarded['From'] = os.environ['FORWARD_FROM_EMAIL']
+              forwarded['To'] = os.environ['FORWARD_TO_EMAIL']
+              forwarded['Reply-To'] = original_from
+
+              body_lines = [
+                  'Forwarded inbound email from willowhousephotography.com',
+                  '',
+                  f'Original From: {original_from}',
+                  f'Original To: {original_to}',
+                  f'SES Message ID: {message_id}',
+                  '',
+                  'Original Message:',
+                  original_text or '(No plain text content available.)',
+              ]
+              forwarded.set_content('\n'.join(body_lines))
+
+              response = ses.send_raw_email(
+                  Source=os.environ['FORWARD_FROM_EMAIL'],
+                  Destinations=[os.environ['FORWARD_TO_EMAIL']],
+                  RawMessage={'Data': forwarded.as_bytes()},
+              )
+
+              print(json.dumps({
+                  'message': 'Inbound email forwarded',
+                  'awsRequestId': context.aws_request_id,
+                  'sesInboundMessageId': message_id,
+                  'sesOutboundMessageId': response.get('MessageId', ''),
+                  'destination': os.environ['FORWARD_TO_EMAIL'],
+              }))
+
+              return {'ok': True}
+
+  InboundForwardPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref InboundForwardFunction
+      Principal: ses.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub 'arn:aws:ses:${AWS::Region}:${AWS::AccountId}:receipt-rule-set/${InboundReceiptRuleSet}:receipt-rule/*'
+
+  InboundReceiptRuleSet:
+    Type: AWS::SES::ReceiptRuleSet
+    Properties:
+      RuleSetName: !Sub '${DomainName}-inbound-rules'
+
+  InboundForwardReceiptRule:
+    Type: AWS::SES::ReceiptRule
+    Properties:
+      RuleSetName: !Ref InboundReceiptRuleSet
+      Rule:
+        Name: !Sub '${DomainName}-forward-${ForwardingMailboxLocalPart}'
+        Enabled: true
+        ScanEnabled: true
+        TlsPolicy: Optional
+        Recipients:
+          - !Sub '${ForwardingMailboxLocalPart}@${DomainName}'
+        Actions:
+          - S3Action:
+              BucketName: !Ref InboundMailBucket
+              ObjectKeyPrefix: inbound/
+          - LambdaAction:
+              FunctionArn: !GetAtt InboundForwardFunction.Arn
+              InvocationType: Event
+
   OriginAccessControl:
     Type: AWS::CloudFront::OriginAccessControl
     Properties:
@@ -403,6 +610,16 @@ Resources:
         HostedZoneId: Z2FDTNDATAQYW2
         EvaluateTargetHealth: false
 
+  InboundMailMxRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: MX
+      TTL: 300
+      ResourceRecords:
+        - !Sub '10 inbound-smtp.${AWS::Region}.amazonaws.com'
+
 Outputs:
   WebsiteBucketName:
     Value: !Ref WebsiteBucket
@@ -414,4 +631,10 @@ Outputs:
     Value: !Sub 'https://${DomainName}'
   ContactApiRoute:
     Value: !Sub 'https://${DomainName}/api/contact'
+  ForwardingInboxAddress:
+    Value: !Sub '${ForwardingMailboxLocalPart}@${DomainName}'
+  ForwardingDestinationAddress:
+    Value: !Ref ForwardingDestinationEmail
+  InboundReceiptRuleSetName:
+    Value: !Ref InboundReceiptRuleSet
 
