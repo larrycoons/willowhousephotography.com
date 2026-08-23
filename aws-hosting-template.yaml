@@ -184,8 +184,8 @@ Resources:
               message = (data.get('message') or '').strip()
               attachment = data.get('attachment') or None
 
-              if not name or not email or not message:
-                  return _json(400, {'message': 'Name, email, and message are required.'})
+                if not name or not email:
+                  return _json(400, {'message': 'Name and email are required.'})
 
               recipients = [item.strip() for item in os.environ.get('TO_EMAILS', '').split(',') if item.strip()]
               if not recipients:
@@ -212,7 +212,7 @@ Resources:
                   f'Location: {location or "-"}',
                   '',
                   'Message:',
-                  message,
+                    message or '-',
               ]
 
               msg = EmailMessage()

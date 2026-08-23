@@ -73,8 +73,8 @@
       }
     }
 
-    if (!payload.name || !payload.email || !payload.message) {
-      setStatus("Please fill out the required fields before sending.", true);
+    if (!payload.name || !payload.email) {
+      setStatus("Please complete Full Name and Email Address before sending.", true);
       return;
     }
 
