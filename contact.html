@@ -71,6 +71,18 @@
                     <option>Not sure yet</option>
                   </select>
                 </label>
+                <label>
+                  Location (address or coordinates)
+                  <input
+                    type="text"
+                    name="location"
+                    placeholder="123 Main St, Lubbock, TX or 33.5779, -101.8552"
+                  />
+                </label>
+                <label>
+                  Add an image (optional)
+                  <input type="file" name="reference-image" accept="image/*" />
+                </label>
               </div>
 
               <label>
@@ -98,6 +110,20 @@
           </aside>
         </section>
       </main>
+
+      <footer class="site-footer">
+        <p>Willow House Photography</p>
+        <a
+          class="site-credit-link"
+          href="https://www.larrycoons.com"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Built with Sovereign Logic"
+        >
+          <img class="site-credit-icon" src="favicon.svg" alt="" aria-hidden="true" />
+          <span>Built with Sovereign Logic</span>
+        </a>
+      </footer>
 
       <script src="contact-form.js"></script>
     </div>

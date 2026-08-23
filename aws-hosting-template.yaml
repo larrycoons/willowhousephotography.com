@@ -140,12 +140,14 @@ Resources:
       Code:
         ZipFile: |
           import base64
+          import binascii
           import json
           import os
           import boto3
+          from email.message import EmailMessage
           from botocore.exceptions import BotoCoreError, ClientError
 
-          ses = boto3.client('sesv2')
+          ses = boto3.client('ses')
 
           def _json(status, payload):
               return {
@@ -178,7 +180,9 @@ Resources:
               email = (data.get('email') or '').strip()
               phone = (data.get('phone') or '').strip()
               session_type = (data.get('sessionType') or '').strip()
+              location = (data.get('location') or '').strip()
               message = (data.get('message') or '').strip()
+              attachment = data.get('attachment') or None
 
               if not name or not email or not message:
                   return _json(400, {'message': 'Name, email, and message are required.'})
@@ -205,29 +209,59 @@ Resources:
                   f'Email: {email}',
                   f'Phone: {phone or "-"}',
                   f'Session Type: {session_type or "-"}',
+                  f'Location: {location or "-"}',
                   '',
                   'Message:',
                   message,
               ]
 
+              msg = EmailMessage()
+              msg['Subject'] = subject
+              msg['From'] = os.environ['FROM_EMAIL']
+              msg['To'] = ', '.join(recipients)
+              msg['Reply-To'] = email
+              msg.set_content('\n'.join(plain), charset='utf-8')
+
+              attachment_name = ''
+              if attachment:
+                  filename = str(attachment.get('filename') or 'reference-image').strip() or 'reference-image'
+                  content_type = str(attachment.get('contentType') or 'application/octet-stream').strip()
+                  data_base64 = attachment.get('dataBase64')
+
+                  if not data_base64:
+                      return _json(400, {'message': 'Attachment data is missing.'})
+
+                  try:
+                      attachment_bytes = base64.b64decode(data_base64, validate=True)
+                  except (binascii.Error, ValueError):
+                      return _json(400, {'message': 'Attachment is not valid base64 data.'})
+
+                  if len(attachment_bytes) > 3 * 1024 * 1024:
+                      return _json(400, {'message': 'Attachment must be 3 MB or smaller.'})
+
+                  main_type, _, sub_type = content_type.partition('/')
+                  if not main_type or not sub_type:
+                      main_type = 'application'
+                      sub_type = 'octet-stream'
+
+                  msg.add_attachment(
+                      attachment_bytes,
+                      maintype=main_type,
+                      subtype=sub_type,
+                      filename=filename,
+                  )
+                  attachment_name = filename
+
               try:
-                  response = ses.send_email(
-                      FromEmailAddress=os.environ['FROM_EMAIL'],
-                      Destination={'ToAddresses': recipients},
-                      ReplyToAddresses=[email],
-                      Content={
-                          'Simple': {
-                              'Subject': {'Data': subject, 'Charset': 'UTF-8'},
-                              'Body': {
-                                  'Text': {'Data': '\n'.join(plain), 'Charset': 'UTF-8'},
-                              },
-                          },
-                        },
+                  response = ses.send_raw_email(
+                    Source=os.environ['FROM_EMAIL'],
+                    Destinations=recipients,
+                    RawMessage={'Data': msg.as_bytes()},
                   )
               except (ClientError, BotoCoreError) as exc:
                   print(json.dumps({
                       'level': 'error',
-                      'message': 'SES send_email failed',
+                    'message': 'SES send_raw_email failed',
                       'awsRequestId': context.aws_request_id,
                       'error': str(exc),
                   }))
@@ -235,10 +269,12 @@ Resources:
 
               print(json.dumps({
                   'level': 'info',
-                  'message': 'SES send_email accepted',
+                  'message': 'SES send_raw_email accepted',
                   'awsRequestId': context.aws_request_id,
                   'messageId': response.get('MessageId', ''),
                   'recipients': recipients,
+                  'hasAttachment': bool(attachment),
+                  'attachmentName': attachment_name,
               }))
 
               return _json(200, {'ok': True, 'message': 'Inquiry sent.'})
