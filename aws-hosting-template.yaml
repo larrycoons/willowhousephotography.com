@@ -18,7 +18,7 @@ Parameters:
     Description: Verified SES sender address used by the contact form Lambda.
   NotificationEmails:
     Type: String
-    Default: larrycoons@larrycoons.com,lynseycoons@gmail.com
+    Default: larrycoons@larrycoons.com,lynsey@willowhousephotography.com
     Description: Comma-separated list of recipient emails for contact inquiries.
   ForwardingMailboxLocalPart:
     Type: String

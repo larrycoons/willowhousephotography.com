@@ -5,7 +5,7 @@ DOMAIN_NAME="${DOMAIN_NAME:-willowhousephotography.com}"
 HOSTED_ZONE_ID="${HOSTED_ZONE_ID:-}"
 CERTIFICATE_ARN="${CERTIFICATE_ARN:-}"
 CONTACT_FROM_EMAIL="${CONTACT_FROM_EMAIL:-}"
-NOTIFICATION_EMAILS="${NOTIFICATION_EMAILS:-larrycoons@larrycoons.com,lynseycoons@gmail.com}"
+NOTIFICATION_EMAILS="${NOTIFICATION_EMAILS:-larrycoons@larrycoons.com,lynsey@willowhousephotography.com}"
 STACK_NAME="${STACK_NAME:-willow-house-photography}"
 REGION="${AWS_REGION:-us-east-1}"
 
