@@ -37,7 +37,7 @@ aws s3 sync . "s3://${WEBSITE_BUCKET}" \
   --exclude "images/*"
 
 if [[ -d images ]]; then
-  aws s3 sync images/ "s3://${IMAGES_BUCKET}/images/" --delete
+  aws s3 sync images/ "s3://${IMAGES_BUCKET}/images/" --delete --exclude ".DS_Store"
 fi
 
 DIST_ID="$(aws cloudformation describe-stacks \
