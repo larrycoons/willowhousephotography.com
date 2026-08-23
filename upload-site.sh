@@ -24,9 +24,15 @@ fi
 
 aws s3 sync . "s3://${WEBSITE_BUCKET}" \
   --delete \
+  --exclude ".git/*" \
+  --exclude ".git/**" \
+  --exclude ".gitignore" \
   --exclude ".DS_Store" \
+  --exclude "*.md" \
+  --exclude "*.yaml" \
   --exclude "aws-hosting*" \
   --exclude "deploy-aws.sh" \
+  --exclude "deploy-and-push.sh" \
   --exclude "upload-site.sh" \
   --exclude "images/*"
 
